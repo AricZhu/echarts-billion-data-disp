@@ -1,8 +1,11 @@
 <template>
 <div class="wrapper">
-    <button @click="startGraph">画图</button>
-    <button @click="clearGraph">clear</button>
-    <div style="font-size: 18px;">{{ `当前采样率: ${curSampleRate}: 1` }}</div>
+    <div class="tools">
+        <el-button @click="startGraph" type="primary" style="margin-left: 60px;">画图</el-button>
+        <el-button @click="clearGraph" type="success">清除</el-button>
+        <el-input v-model="xZoom" placeholder="请输入 x 轴范围 x1:x2" style="width: 300px; margin: 0 40px;" @change="inputZoom"></el-input>
+        <div style="font-size: 16px;">{{ `当前采样率: ${curSampleRate}: 1` }}</div>
+    </div>
     <div id="graph"></div>
 </div>
 </template>
@@ -55,11 +58,12 @@ export default {
     },
     data () {
         return {
-            startRender: false,
-            startRenderTime: 0,
+            xZoom: '',
             sampleRates: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192],
             initSampleRate: 0,
             curSampleRate: 0,
+            vS: 0,
+            vE: 0,
             lockedStartIdx: 0,
             lockedEndIdx: 0,
             viewDispPoints: 10000
@@ -69,28 +73,58 @@ export default {
         init () {
             this.genData()
             echartsIns = echarts.init(document.querySelector('#graph'))
-            echartsIns.on('finished', this.renderFinished)
-            echartsIns.on('datazoom', this.handleDataZoom)
+            echartsIns.on('datazoom', __debounce(this.handleDataZoom, 100))
             echartsIns.setOption(defaultCfg)
+
+            function __debounce (fn, timeDelta) {
+                let time
+                return function (evt) {
+                    clearTimeout(time)
+                    time = setTimeout(_ => fn(evt), timeDelta)
+                }
+            }
         },
         genData () {
-            let t1 = new Date()
             xOriginData = []
             yOriginData = []
             for (let i = 0; i < 1000000; i++) {
                 xOriginData.push(i)
                 yOriginData.push(Math.sin(i / 100))
             }
-            console.log(`time for generate 1 million data: ${new Date() - t1} ms`)
         },
-        handleDataZoom (event) {
+        inputZoom () {
+            let [s, e] = this.xZoom.split(':')
+            s = parseInt(s)
+            e = parseInt(e)
+            // 根据用户输入的原始数据位置 s，e 倒推出在当前 x 数据轴中的 curS，curE
+            let curS = 0
+            let curE = 0
+            if (s <= this.initSampleRate * this.vS) {
+                curS = Math.floor(s / this.initSampleRate)
+            } else if (s > this.initSampleRate * this.vS && s <= ((this.vE - this.vS) * this.curSampleRate + this.vS * this.initSampleRate)) {
+                curS = this.vS + Math.floor((s - this.vS * this.initSampleRate) / this.curSampleRate)
+            } else {
+                curS = this.vE + Math.floor((s - this.vS * this.initSampleRate - (this.vE - this.vS) * this.curSampleRate - this.vE) / this.initSampleRate)
+            }
+
+            if (e <= this.initSampleRate * this.vS) {
+                curE = Math.floor(e / this.initSampleRate)
+            } else if (e > this.initSampleRate * this.vS && e <= ((this.vE - this.vS) * this.curSampleRate + this.vS * this.initSampleRate)) {
+                curE = this.vS + Math.floor((e - this.vS * this.initSampleRate) / this.curSampleRate)
+            } else {
+                curE = this.vE + Math.floor((e - this.vS * this.initSampleRate - (this.vE - this.vS) * this.curSampleRate - this.vE) / this.initSampleRate)
+            }
+
+            this.handleDataZoom({start: curS, end: curE}, true)
+        },
+        handleDataZoom (event, isPos) {
             let cfg = echartsIns.getOption()
             let xData = cfg.xAxis[0].data
             let yData = cfg.series[0].data
 
-            // 用户缩放的时候获取当前的可视区
-            let startIndex = Math.floor((event.batch ? event.batch[0].start : event.start) * xData.length / 100)
-            let endIndex = Math.floor((event.batch ? event.batch[0].end : event.end) * xData.length / 100)
+            // 用户缩放的时候获取当前的可视区, 如果是用户定位，则非百分比数据，直接赋值即可
+            let startIndex = Math.floor((event.batch ? event.batch[0].start : event.start) * (isPos ? 1 : xData.length / 100))
+            let endIndex = Math.floor((event.batch ? event.batch[0].end : event.end) * (isPos ? 1 : xData.length / 100))
             if (endIndex >= xData.length) {
                 endIndex = xData.length - 1
             }
@@ -98,70 +132,91 @@ export default {
             if (this.lockedStartIdx + this.lockedEndIdx !== 0 && startIndex >= this.lockedStartIdx && endIndex <= this.lockedEndIdx) return
 
             // 调用采样算法实时获取当前最新的可视化区间，采样率以及数据
-            let [nx, ny, startXIdx, endXIdx, nSample] = this.viewDynamicSample(xOriginData, yOriginData, xData, yData, startIndex, endIndex, this.viewDispPoints, this.sampleRates, this.initSampleRate)
+            let options = {
+                curS: startIndex, // 当前缩放后的新的起始位置
+                curE: endIndex, // 当前缩放后的新的结束位置
+                viewDispPoints: this.viewDispPoints, // 可视区点数
+                sampleRates: this.sampleRates, // 采样值列表
+                initSampleRate: this.initSampleRate, // 初始采样值，即非可视区采样率
+                curSampleRate: this.curSampleRate, // 当前可视区采样率
+                vS: this.vS, // 可视区的起始位置
+                vE: this.vE // 可视区的结束位置
+            }
+            let [nx, ny, nS, nE, nSample] = this.viewDynamicSample(xOriginData, yOriginData, xData, yData, options)
             this.curSampleRate = nSample
+            this.vS = nS
+            this.vE = nE
             if (this.curSampleRate === 1) {
-                this.lockedStartIdx = startXIdx
-                this.lockedEndIdx = endXIdx
+                this.lockedStartIdx = nS
+                this.lockedEndIdx = nE
             } else {
                 this.lockedStartIdx = 0
                 this.lockedEndIdx = 0
             }
 
-            this.renderGraph(nx, ny, startXIdx, endXIdx)
+            this.renderGraph(nx, ny, this.vS, this.vE)
         },
         // 可视区动态采样
-        // 原始数据为：originX, originY; 当前数据为 x, y; 当前可视区范围：[xSIdx, xEIdx]; 可视区的点的个数：viewPoints；采样率列表：sampleLists，初始采样率：initSampleRate
         // 算法概要：主要针对当前可视区进行重新采样，使可视区保持足够的点数，同时，非可视区采用初始的采样率，保证总的点数不超过 4 * viewPoints，从而在大数据量的场景中提高了图像流畅度
         // 这里的采样率采用 1, 2, 4, 8, 16, ... 等，使可视区重新采样的时候能尽量的保留原先的点数，减少重绘压力
-        viewDynamicSample (originX, originY, x, y, xSIdx, xEIdx, viewPoints, sampleLists, initSampleRate) {
-            let t1 = new Date()
-            let originLen = originX.length
-            let [newXData, newYData, newXSIdx, newXEIdx, newSampleRate] = [[], [], xSIdx, xEIdx, initSampleRate]
+        // viewDynamicSample (originX, originY, x, y, xSIdx, xEIdx, viewPoints, sampleLists, initSampleRate) {
+        viewDynamicSample (originX, originY, x, y, {curS, curE, viewDispPoints, sampleRates, initSampleRate, curSampleRate, vS, vE}) {
+            let [originLen, newXData, newYData, newS, newE, newSampleRate] = [originX.length, [], [], 0, 0, 0]
+            let [i, originS, originE] = [0, 0, 0]
 
-            let [i, xOriginSIdx, xOriginEIdx] = [0, xSIdx, xEIdx]
-            // 找到原数据中对应的可视区位置
-            for (i = 0; i < originLen; i++) {
-                if (originX[i] !== x[xSIdx]) continue
-                xOriginSIdx = i
-                break
+            // 判断当前操作是 放大、缩小还是平移
+            // 并计算当前的缩放位置映射到原数据中的位置 originS, originE
+            if (curS >= vS && curE <= vE) { // 放大操作, 0-----vS.....curS ~ curE.....vE-----originLen-1
+                originS = vS * initSampleRate + (curS - vS) * curSampleRate
+                originE = vS * initSampleRate + (curE - vS) * curSampleRate
+            } else if (curS <= vS && curE >= vE) { // 缩小操作, 0-----curS-----vS.....vE-----curE-----originLen-1
+                originS = curS * initSampleRate
+                originE = (vS + curE - vE) * initSampleRate + (vE - vS) * curSampleRate
+            } else if ((curS < vS && curE < vE) || (curS > vS && curE > vE)) { // 平移操作
+                if (curS < vS && curE < vS) { // 0-----curS-----curE-----vS.....vE-----originLen-1
+                    originS = curS * initSampleRate
+                    originE = curE * initSampleRate
+                } else if (curS < vS && curE > vS) { // 0-----curS-----vS.....curE.....vE-----originLen-1
+                    originS = curS * initSampleRate
+                    originE = vS * initSampleRate + (curE - vS) * curSampleRate
+                } else if (curS > vS && curS < vE) { // 0-----vS.....curS.....vE-----curE-----originLen-1
+                    originS = vS * initSampleRate + (curS - vS) * curSampleRate
+                    originE = (vS + curE - vE) * initSampleRate + (vE - vS) * curSampleRate
+                } else { // 0-----vS.....vE-----curS-----curE-----originLen-1
+                    originS = (vS + curS - vE) * initSampleRate + (vE - vS) * curSampleRate
+                    originE = (vS + curE - vE) * initSampleRate + (vE - vS) * curSampleRate
+                }
+            } else {
+                console.log(`无法识别当前操作: 当前缩放后区域 [${curS}, ${curE}], 当前可视区域 [${vS}, ${vE}]`)
+                return
             }
-            for (i = originLen - 1; i >= 0; i--) {
-                if (originX[i] !== x[xEIdx]) continue
-                xOriginEIdx = i
-                break
-            }
+
             // 针对当前区间，计算新的采样率
-            for (i = sampleLists.length - 1; i >= 0; i--) {
-                if (Math.floor((xOriginEIdx - xOriginSIdx) / sampleLists[i]) >= viewPoints) {
-                    newSampleRate = sampleLists[i]
+            for (i = sampleRates.length - 1; i >= 0; i--) {
+                if (Math.floor((originE - originS) / sampleRates[i]) >= viewDispPoints) {
+                    newSampleRate = sampleRates[i]
                     break
                 }
             }
-            if (i === -1) newSampleRate = sampleLists[0]
-            // 构造新的数据，其中新的数据由三段构成： [0, xOriginSIdx), [xOriginSIdx, xOriginEIdx], (xOriginEIdx, originLen]
-            // 其中 [xOriginSIdx, xOriginEIdx] 这段数据是采用新的采样率进行采样的，另外两段数据则是采用初始的采样率进行采样
+            if (i === -1) newSampleRate = sampleRates[0]
+
+            // 构造新的数据，其中新的数据由采样这三段数据构成： [0, originS), [originS, originE], (originE, originLen]
+            // 其中 [originS, originE] 这段数据是采用新的采样率进行采样的，另外两段数据则是采用初始的采样率进行采样
             for (let i = 0; i < originLen;) {
                 newXData.push(originX[i])
                 newYData.push(originY[i])
-                if (i >= xOriginSIdx && i <= xOriginEIdx) {
+                if (i >= originS && i <= originE) {
                     i += newSampleRate
                 } else {
                     i += initSampleRate
                 }
             }
-            // 保留原先的缩放位置
-            // 这里需要保证 x 轴的数据是递增的
-            for (i = 0; i < originLen; i++) {
-                if (newXData[i] <= x[xSIdx] && newXData[i + 1] >= x[xSIdx]) {
-                    newXSIdx = i
-                }
-                if (newXData[i] <= x[xEIdx] && newXData[i + 1] >= x[xEIdx]) {
-                    newXEIdx = i
-                }
-            }
-            console.log(`time for sample: ${new Date() - t1} ms`)
-            return [newXData, newYData, newXSIdx, newXEIdx, newSampleRate]
+
+            // 计算出新数据中的可视区位置
+            newS = parseInt(originS / initSampleRate)
+            newE = parseInt(originS / initSampleRate) + parseInt((originE - originS) / newSampleRate)
+
+            return [newXData, newYData, newS, newE, newSampleRate]
         },
         renderGraph (nx, ny, startXIdx, endXIdx) {
             defaultCfg.xAxis.data = nx
@@ -172,8 +227,6 @@ export default {
                     el.endValue = endXIdx
                 })
             }
-            this.startRender = true
-            this.startRenderTime = new Date()
             echartsIns.setOption(defaultCfg)
         },
         startGraph () {
@@ -195,14 +248,9 @@ export default {
                 newXData.push(xOriginData[i])
                 newYData.push(yOriginData[i])
             }
+            this.vS = 0
+            this.vE = newXData.length - 1
             this.renderGraph(newXData, newYData)
-        },
-        renderFinished () {
-            if (this.startRender) {
-                console.log(`time for render graph: ${new Date() - this.startRenderTime} ms`)
-                this.startRenderTime = 0
-            }
-            this.startRender = false
         },
         clearGraph () {
             echartsIns.clear()
@@ -214,11 +262,12 @@ export default {
 </script>
 
 <style scoped>
-.wrapper {
-    height: 800px;
+.tools {
+    display: flex;
+    align-items: center;
 }
 #graph {
     width: 100%;
-    height: 100%;
+    height: 600px;
 }
 </style>
