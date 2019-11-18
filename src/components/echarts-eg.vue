@@ -4,7 +4,7 @@
         <el-button @click="startGraph" type="primary" style="margin-left: 60px;">画图</el-button>
         <el-button @click="clearGraph" type="success">清除</el-button>
         <el-input v-model="xZoom" placeholder="请输入 x 轴范围 x1:x2" style="width: 300px; margin: 0 40px;" @change="inputZoom"></el-input>
-        <div style="font-size: 16px;">{{ `当前采样率: ${curSampleRate}: 1` }}</div>
+        <div style="font-size: 16px;">{{ `当前采样率: ${curSampleRate}: 1, 可视区位置: [${vS}, ${vE}]` }}</div>
     </div>
     <div id="graph"></div>
 </div>
@@ -104,7 +104,7 @@ export default {
             } else if (s > this.initSampleRate * this.vS && s <= ((this.vE - this.vS) * this.curSampleRate + this.vS * this.initSampleRate)) {
                 curS = this.vS + Math.floor((s - this.vS * this.initSampleRate) / this.curSampleRate)
             } else {
-                curS = this.vE + Math.floor((s - this.vS * this.initSampleRate - (this.vE - this.vS) * this.curSampleRate - this.vE) / this.initSampleRate)
+                curS = this.vE + Math.floor((s - this.vS * this.initSampleRate - (this.vE - this.vS) * this.curSampleRate) / this.initSampleRate)
             }
 
             if (e <= this.initSampleRate * this.vS) {
@@ -112,7 +112,7 @@ export default {
             } else if (e > this.initSampleRate * this.vS && e <= ((this.vE - this.vS) * this.curSampleRate + this.vS * this.initSampleRate)) {
                 curE = this.vS + Math.floor((e - this.vS * this.initSampleRate) / this.curSampleRate)
             } else {
-                curE = this.vE + Math.floor((e - this.vS * this.initSampleRate - (this.vE - this.vS) * this.curSampleRate - this.vE) / this.initSampleRate)
+                curE = this.vE + Math.floor((e - this.vS * this.initSampleRate - (this.vE - this.vS) * this.curSampleRate) / this.initSampleRate)
             }
 
             if (curE === curS) {
@@ -133,10 +133,14 @@ export default {
                 endIndex = xData.length - 1
             }
             // 当采样率小于 1 ，并且当前可视区在锁定的可视区内的时候，直接返回即可
-            if (this.lockedStartIdx + this.lockedEndIdx !== 0 && startIndex >= this.lockedStartIdx && endIndex <= this.lockedEndIdx) return
+            if (this.lockedStartIdx + this.lockedEndIdx !== 0 && startIndex >= this.lockedStartIdx && endIndex <= this.lockedEndIdx) {
+                console.log(`current idx: [${startIndex}, ${endIndex}], curLock Idx: [${this.lockedStartIdx}, ${this.lockedEndIdx}]`)
+                return
+            }
 
             // 调用采样算法实时获取当前最新的可视化区间，采样率以及数据
             let options = {
+                isPos: isPos, // 是否是快速定位
                 curS: startIndex, // 当前缩放后的新的起始位置
                 curE: endIndex, // 当前缩放后的新的结束位置
                 viewDispPoints: this.viewDispPoints, // 可视区点数
@@ -150,7 +154,7 @@ export default {
             this.curSampleRate = nSample
             this.vS = nS
             this.vE = nE
-            if (this.curSampleRate === 1) {
+            if (this.curSampleRate === 1) { // 对于直接输入定位的操作，这里不进行锁定
                 this.lockedStartIdx = nS
                 this.lockedEndIdx = nE
             } else {
@@ -164,7 +168,7 @@ export default {
         // 算法概要：主要针对当前可视区进行重新采样，使可视区保持足够的点数，同时，非可视区采用初始的采样率，保证总的点数不超过 4 * viewPoints，从而在大数据量的场景中提高了图像流畅度
         // 这里的采样率采用 1, 2, 4, 8, 16, ... 等，使可视区重新采样的时候能尽量的保留原先的点数，减少重绘压力
         // viewDynamicSample (originX, originY, x, y, xSIdx, xEIdx, viewPoints, sampleLists, initSampleRate) {
-        viewDynamicSample (originX, originY, x, y, {curS, curE, viewDispPoints, sampleRates, initSampleRate, curSampleRate, vS, vE}) {
+        viewDynamicSample (originX, originY, x, y, {isPos, curS, curE, viewDispPoints, sampleRates, initSampleRate, curSampleRate, vS, vE}) {
             let [originLen, newXData, newYData, newS, newE, newSampleRate] = [originX.length, [], [], 0, 0, 0]
             let [i, originS, originE] = [0, 0, 0]
 
@@ -174,8 +178,13 @@ export default {
                 originS = vS * initSampleRate + (curS - vS) * curSampleRate
                 originE = vS * initSampleRate + (curE - vS) * curSampleRate
             } else if (curS <= vS && curE >= vE) { // 缩小操作, 0-----curS-----vS.....vE-----curE-----originLen-1
-                originS = curS * initSampleRate
-                originE = (vS + curE - vE) * initSampleRate + (vE - vS) * curSampleRate
+                if (isPos) { // 快速定位情况
+                    originS = curS * initSampleRate
+                    originE = (vS + curE - vE) * initSampleRate + (vE - vS) * curSampleRate
+                } else { // 用户缩放鼠标滚轮缩放情况，使用 curSampleRate 进行优化，使得缩小操作更加平滑, 消除非线性缩小的问题 (即缩小速度过快)
+                    originS = vS * initSampleRate - (vS - curS) * curSampleRate
+                    originE = vS * initSampleRate + (vE - vS + curE - vE) * curSampleRate
+                }
             } else if ((curS < vS && curE < vE) || (curS > vS && curE > vE)) { // 平移操作
                 if (curS < vS && curE < vS) { // 0-----curS-----curE-----vS.....vE-----originLen-1
                     originS = curS * initSampleRate
@@ -206,19 +215,26 @@ export default {
 
             // 构造新的数据，其中新的数据由采样这三段数据构成： [0, originS), [originS, originE], (originE, originLen]
             // 其中 [originS, originE] 这段数据是采用新的采样率进行采样的，另外两段数据则是采用初始的采样率进行采样
-            for (let i = 0; i < originLen;) {
-                newXData.push(originX[i])
-                newYData.push(originY[i])
-                if (i >= originS && i <= originE) {
-                    i += newSampleRate
+            newS = newE = -1
+            for (let [j, cnt] = [0, 0]; j < originLen;) {
+                cnt++
+                newXData.push(originX[j])
+                newYData.push(originY[j])
+                if (j >= originS && j <= originE) {
+                    j += newSampleRate
+                    if (newS === -1) {
+                        newS = cnt - 1
+                    }
                 } else {
-                    i += initSampleRate
+                    j += initSampleRate
+                    if (j > originE && newE === -1) {
+                        newE = cnt - 1
+                    }
                 }
             }
-
-            // 计算出新数据中的可视区位置
-            newS = parseInt(originS / initSampleRate)
-            newE = parseInt(originS / initSampleRate) + parseInt((originE - originS) / newSampleRate)
+            if (newE === -1) {
+                newE = Math.floor(originS / initSampleRate) + Math.floor((originE - originS) / newSampleRate)
+            }
 
             return [newXData, newYData, newS, newE, newSampleRate]
         },
