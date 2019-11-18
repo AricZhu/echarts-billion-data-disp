@@ -73,6 +73,9 @@ export default {
         init () {
             this.genData()
             echartsIns = echarts.init(document.querySelector('#graph'))
+            echartsIns.addEventListener('resize', function () {
+                echartsIns.resize()
+            })
             echartsIns.on('datazoom', __debounce(this.handleDataZoom, 100))
             echartsIns.setOption(defaultCfg)
 
@@ -133,10 +136,7 @@ export default {
                 endIndex = xData.length - 1
             }
             // 当采样率小于 1 ，并且当前可视区在锁定的可视区内的时候，直接返回即可
-            if (this.lockedStartIdx + this.lockedEndIdx !== 0 && startIndex >= this.lockedStartIdx && endIndex <= this.lockedEndIdx) {
-                console.log(`current idx: [${startIndex}, ${endIndex}], curLock Idx: [${this.lockedStartIdx}, ${this.lockedEndIdx}]`)
-                return
-            }
+            if (this.lockedStartIdx + this.lockedEndIdx !== 0 && startIndex >= this.lockedStartIdx && endIndex <= this.lockedEndIdx) return
 
             // 调用采样算法实时获取当前最新的可视化区间，采样率以及数据
             let options = {
@@ -164,10 +164,10 @@ export default {
 
             this.renderGraph(nx, ny, this.vS, this.vE)
         },
-        // 可视区动态采样
-        // 算法概要：主要针对当前可视区进行重新采样，使可视区保持足够的点数，同时，非可视区采用初始的采样率，保证总的点数不超过 4 * viewPoints，从而在大数据量的场景中提高了图像流畅度
-        // 这里的采样率采用 1, 2, 4, 8, 16, ... 等，使可视区重新采样的时候能尽量的保留原先的点数，减少重绘压力
-        // viewDynamicSample (originX, originY, x, y, xSIdx, xEIdx, viewPoints, sampleLists, initSampleRate) {
+        /* 可视区动态采样
+        * 算法概要：主要针对当前可视区进行重新采样，使可视区保持足够的点数，同时，非可视区采用初始的采样率，保证总的点数不超过 4 * viewPoints，从而在大数据量的场景中提高了图像流畅度
+        * 这里的采样率采用 1, 2, 4, 8, 16, ... 等，使可视区重新采样的时候能尽量的保留原先的点数，减少重绘压力
+        */
         viewDynamicSample (originX, originY, x, y, {isPos, curS, curE, viewDispPoints, sampleRates, initSampleRate, curSampleRate, vS, vE}) {
             let [originLen, newXData, newYData, newS, newE, newSampleRate] = [originX.length, [], [], 0, 0, 0]
             let [i, originS, originE] = [0, 0, 0]
