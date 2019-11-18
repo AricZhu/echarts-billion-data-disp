@@ -115,6 +115,10 @@ export default {
                 curE = this.vE + Math.floor((e - this.vS * this.initSampleRate - (this.vE - this.vS) * this.curSampleRate - this.vE) / this.initSampleRate)
             }
 
+            if (curE === curS) {
+                curE += 1
+            }
+
             this.handleDataZoom({start: curS, end: curE}, true)
         },
         handleDataZoom (event, isPos) {
