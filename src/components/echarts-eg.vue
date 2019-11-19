@@ -38,6 +38,10 @@ let defaultCfg = {
         {
             type: 'inside',
             xAxisIndex: [0]
+        },
+        {
+            type: 'inside',
+            xAxisIndex: [0]
         }
     ],
     series: [
@@ -73,7 +77,7 @@ export default {
         init () {
             this.genData()
             echartsIns = echarts.init(document.querySelector('#graph'))
-            echartsIns.addEventListener('resize', function () {
+            window.addEventListener('resize', function () {
                 echartsIns.resize()
             })
             echartsIns.on('datazoom', __debounce(this.handleDataZoom, 100))
@@ -190,11 +194,15 @@ export default {
                     originS = curS * initSampleRate
                     originE = curE * initSampleRate
                 } else if (curS < vS && curE > vS) { // 0-----curS-----vS.....curE.....vE-----originLen-1
-                    originS = curS * initSampleRate
+                    originS = isPos
+                        ? curS * initSampleRate
+                        : vS * initSampleRate - (vS - curS) * curSampleRate // 对于非快速定位，这里进行了优化，使平移更加平滑
                     originE = vS * initSampleRate + (curE - vS) * curSampleRate
                 } else if (curS > vS && curS < vE) { // 0-----vS.....curS.....vE-----curE-----originLen-1
                     originS = vS * initSampleRate + (curS - vS) * curSampleRate
-                    originE = (vS + curE - vE) * initSampleRate + (vE - vS) * curSampleRate
+                    originE = isPos
+                        ? (vS + curE - vE) * initSampleRate + (vE - vS) * curSampleRate
+                        : vS * initSampleRate + (curE - vS) * curSampleRate // 对于非快速定位，这里进行了优化，使平移更加平滑
                 } else { // 0-----vS.....vE-----curS-----curE-----originLen-1
                     originS = (vS + curS - vE) * initSampleRate + (vE - vS) * curSampleRate
                     originE = (vS + curE - vE) * initSampleRate + (vE - vS) * curSampleRate
@@ -202,6 +210,14 @@ export default {
             } else {
                 console.log(`无法识别当前操作: 当前缩放后区域 [${curS}, ${curE}], 当前可视区域 [${vS}, ${vE}]`)
                 return
+            }
+
+            // 如果 originS 和 originE 间距过小，则手动增加间距，防止后续采样中因间距过小，而直接跳过 originS, originE 这段区间
+            if ((originE - originS) < initSampleRate) {
+                originS = originS > initSampleRate
+                    ? originS - initSampleRate
+                    : 0
+                originE += initSampleRate
             }
 
             // 针对当前区间，计算新的采样率
@@ -232,9 +248,8 @@ export default {
                     }
                 }
             }
-            if (newE === -1) {
-                newE = Math.floor(originS / initSampleRate) + Math.floor((originE - originS) / newSampleRate)
-            }
+            if (newS === -1) newS = 0
+            if (newE === -1) newE = newXData.length - 1
 
             return [newXData, newYData, newS, newE, newSampleRate]
         },
