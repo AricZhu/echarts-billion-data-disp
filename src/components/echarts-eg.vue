@@ -4,7 +4,7 @@
         <el-button @click="startGraph" type="primary" style="margin-left: 60px;">画图</el-button>
         <el-button @click="clearGraph" type="success">清除</el-button>
         <el-input v-model="xZoom" placeholder="请输入 x 轴范围 x1:x2" style="width: 300px; margin: 0 40px;" @change="inputZoom"></el-input>
-        <div style="font-size: 16px;">{{ `当前采样率: ${curSampleRate}: 1, 可视区位置: [${vS}, ${vE}]` }}</div>
+        <div v-if="curSampleRate" style="font-size: 16px;">{{ `当前采样率: ${curSampleRate}: 1` }}</div>
     </div>
     <div id="graph"></div>
 </div>
@@ -288,9 +288,7 @@ export default {
             this.renderGraph(newXData, newYData)
         },
         clearGraph () {
-            echartsIns.clear()
-            this.curSampleRate = 0
-            this.initSampleRate = 0
+            location.reload()
         }
     }
 }
